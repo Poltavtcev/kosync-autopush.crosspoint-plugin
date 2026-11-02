@@ -3,7 +3,7 @@
   "title": "KOSync Auto-push",
   "description": "Pushes reading progress to a KOSync server on sleep",
   "author": "Petr Klejch",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "mount": "settings",
   "compatibility": {
     "firmware_family": ["crosspoint"],
