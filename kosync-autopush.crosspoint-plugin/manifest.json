@@ -1,0 +1,19 @@
+{
+  "name": "kosync-autopush",
+  "title": "KOSync Auto-push",
+  "description": "Pushes reading progress to a KOSync server on sleep",
+  "author": "Petr Klejch",
+  "version": "1.0.0",
+  "mount": "settings",
+  "compatibility": {
+    "firmware_family": ["crosspoint"],
+    "plugin_api_min": 1
+  },
+  "files": [
+    "manifest.json",
+    "device.json",
+    "plugin.js",
+    "README.md",
+    "DETAILS.md"
+  ]
+}

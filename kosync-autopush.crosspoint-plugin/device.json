@@ -1,0 +1,22 @@
+{
+  "title": "KOSync Auto-push",
+  "description": "Pushes reading progress to a KOSync server on sleep",
+  "config": { "file": "config.json" },
+  "events": {
+    "reader.session": {
+      "connect": true,
+      "request": {
+        "method": "PUT",
+        "url": "{cfg.server}/syncs/progress",
+        "headers": {
+          "x-auth-user": "{cfg.user}",
+          "x-auth-key": "{cfg.key}",
+          "Accept": "application/vnd.koreader.v1+json",
+          "Content-Type": "application/json"
+        },
+        "body": "{\"document\":\"{event.document}\",\"progress\":\"crosspoint-autopush\",\"percentage\":{event.end_progress_bp}e-4,\"device\":\"{cfg.device}\",\"device_id\":\"{cfg.device_id}\"}"
+      },
+      "toast": "KOSync: progress pushed"
+    }
+  }
+}
