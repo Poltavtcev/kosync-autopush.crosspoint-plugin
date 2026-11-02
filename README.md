@@ -1,5 +1,7 @@
 # KOSync Auto-push for CrossPoint
 
+![AI generated: 100%](https://img.shields.io/badge/AI%20generated-100%25-blueviolet)
+
 A [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) SD-card plugin that pushes reading
 progress to a KOSync server automatically when the reader goes to sleep.
 
