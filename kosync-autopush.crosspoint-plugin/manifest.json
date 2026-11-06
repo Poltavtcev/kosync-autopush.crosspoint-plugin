@@ -1,9 +1,9 @@
 {
   "name": "kosync-autopush",
   "title": "KOSync Auto-push",
-  "description": "Pushes reading progress to a KOSync server on sleep",
-  "author": "Petr Klejch",
-  "version": "0.0.1",
+  "description": "Pushes reading progress to a KOSync or Calibre-Web Automated server on sleep",
+  "author": "Petr Klejch & Poltavtcev",
+  "version": "0.1.0",
   "mount": "settings",
   "compatibility": {
     "firmware_family": ["crosspoint"],
