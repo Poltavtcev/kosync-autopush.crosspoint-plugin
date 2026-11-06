@@ -7,7 +7,7 @@
       "connect": true,
       "request": {
         "method": "PUT",
-        "url": "{cfg.server}/syncs/progress",
+        "url": "{cfg.sync_url}",
         "headers": {
           "x-auth-user": "{cfg.user}",
           "x-auth-key": "{cfg.key}",

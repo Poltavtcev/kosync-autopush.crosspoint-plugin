@@ -100,7 +100,7 @@
     const user = el('input', { type: 'text', value: saved.user || '', autocomplete: 'username' });
     const pass = el('input', {
       type: 'password', autocomplete: 'new-password',
-      placeholder: saved.key ? '(saved - leave blank to keep)' : ''
+      placeholder: (saved.key || saved.auth_header) ? '(saved - leave blank to keep)' : ''
     });
     const device = el('input', { type: 'text', value: saved.device || 'CrossPoint' });
     const status = el('p', { className: 'status' });
@@ -113,41 +113,108 @@
       status.style.color = ok === false ? '#c0392b' : ok ? '#27ae60' : '';
     }
 
-    // Returns the config to save, or throws with a message for the user.
     function collect() {
-      const cfg = {
-        server: server.value.trim().replace(/\/+$/, ''),
-        user: user.value.trim(),
-        key: pass.value ? md5(pass.value) : (saved.key || ''),
-        device: device.value.trim() || 'CrossPoint',
+      const s = server.value.trim().replace(/\/+$/, '');
+      const u = user.value.trim();
+      const p = pass.value;
+      const dev = device.value.trim() || 'CrossPoint';
+
+      if (!/^https?:\/\/[^\s"\\]+$/.test(s)) throw new Error('Server URL must start with http:// or https://');
+      if (!u) throw new Error('Username is required');
+      if (!p && !saved.key && !saved.auth_header) throw new Error('Password is required');
+      for (const k of ['user', 'device']) {
+        const val = k === 'user' ? u : dev;
+        if (UNSAFE.test(val)) throw new Error('Quotes, backslashes and control characters are not allowed in ' + k);
+      }
+
+      return {
+        server: s,
+        user: u,
+        password: p,
+        device: dev,
         device_id: saved.device_id || randomHex(16)
       };
-      if (!/^https?:\/\/[^\s"\\]+$/.test(cfg.server)) throw new Error('Server URL must start with http:// or https://');
-      if (!cfg.user) throw new Error('Username is required');
-      if (!cfg.key) throw new Error('Password is required');
-      for (const k of ['user', 'device']) {
-        if (UNSAFE.test(cfg[k])) throw new Error('Quotes, backslashes and control characters are not allowed in ' + k);
-      }
-      return cfg;
     }
 
-    async function testLogin(cfg) {
-      const r = await api.relay('GET', cfg.server + '/users/auth', {
-        'x-auth-user': cfg.user,
-        'x-auth-key': cfg.key,
-        'Accept': 'application/vnd.koreader.v1+json'
-      }, '');
-      if (r.status === 200) return;
-      if (r.status === 401 || r.status === 403) throw new Error('Server rejected the username or password (HTTP ' + r.status + ')');
-      throw new Error('Unexpected answer from server: HTTP ' + r.status);
+    async function detectAndTest(cfg) {
+      const s = cfg.server;
+      const u = cfg.user;
+      const rawPass = cfg.password;
+
+      const md5Key = rawPass ? md5(rawPass) : (saved.key || '');
+      const basicAuth = rawPass ? ('Basic ' + toBase64(u + ':' + rawPass)) : (saved.auth_header || '');
+
+      const hasKosyncInUrl = /\/kosync$/i.test(s);
+      const cwaUrl = hasKosyncInUrl ? s : (s + '/kosync');
+      const standardUrl = s;
+
+      const candidates = hasKosyncInUrl
+        ? [
+            {
+              type: 'cwa',
+              name: 'Calibre-Web Automated',
+              authUrl: cwaUrl + '/users/auth',
+              syncUrl: cwaUrl + '/syncs/progress',
+              headers: { 'Authorization': basicAuth, 'Accept': 'application/vnd.koreader.v1+json' }
+            },
+            {
+              type: 'kosync',
+              name: 'Standard KOSync',
+              authUrl: standardUrl + '/users/auth',
+              syncUrl: standardUrl + '/syncs/progress',
+              headers: { 'x-auth-user': u, 'x-auth-key': md5Key, 'Accept': 'application/vnd.koreader.v1+json' }
+            }
+          ]
+        : [
+            {
+              type: 'kosync',
+              name: 'Standard KOSync',
+              authUrl: standardUrl + '/users/auth',
+              syncUrl: standardUrl + '/syncs/progress',
+              headers: { 'x-auth-user': u, 'x-auth-key': md5Key, 'Accept': 'application/vnd.koreader.v1+json' }
+            },
+            {
+              type: 'cwa',
+              name: 'Calibre-Web Automated',
+              authUrl: cwaUrl + '/users/auth',
+              syncUrl: cwaUrl + '/syncs/progress',
+              headers: { 'Authorization': basicAuth, 'Accept': 'application/vnd.koreader.v1+json' }
+            }
+          ];
+
+      let lastAuthError = null;
+      for (const cand of candidates) {
+        try {
+          const r = await api.relay('GET', cand.authUrl, cand.headers, '');
+          if (r.status === 200) {
+            return {
+              type: cand.type,
+              name: cand.name,
+              syncUrl: cand.syncUrl,
+              authHeader: cand.type === 'cwa' ? basicAuth : '',
+              key: cand.type === 'kosync' ? md5Key : '',
+              user: u
+            };
+          }
+          if (r.status === 401 || r.status === 403) {
+            lastAuthError = cand.name + ' rejected credentials (HTTP ' + r.status + ')';
+          }
+        } catch (e) {
+          // Relay or network failure, try next candidate
+        }
+      }
+
+      if (lastAuthError) throw new Error(lastAuthError);
+      throw new Error('Connection failed: neither KOSync nor Calibre-Web Automated responded at ' + s);
     }
 
     testBtn.onclick = async () => {
       testBtn.disabled = true;
-      setStatus('Testing...');
+      setStatus('Detecting server and testing login...');
       try {
-        await testLogin(collect());
-        setStatus('Login OK.', true);
+        const cfg = collect();
+        const detected = await detectAndTest(cfg);
+        setStatus('Login OK (' + detected.name + ' detected).', true);
       } catch (e) {
         setStatus(e.message || String(e), false);
       } finally {
@@ -157,14 +224,74 @@
 
     saveBtn.onclick = async () => {
       saveBtn.disabled = true;
-      setStatus('Saving...');
+      setStatus('Detecting server...');
       try {
         const cfg = collect();
-        await api.writeFile(api.dir + '/config.json', toBase64(JSON.stringify(cfg)));
-        saved = cfg;
+        let detected = null;
+        try {
+          detected = await detectAndTest(cfg);
+        } catch (e) {
+          if (e.message && e.message.includes('rejected credentials')) {
+            throw e;
+          }
+          const isCwa = /\/kosync$/i.test(cfg.server);
+          const rawPass = cfg.password;
+          detected = {
+            type: isCwa ? 'cwa' : 'kosync',
+            name: isCwa ? 'Calibre-Web Automated (unverified)' : 'Standard KOSync (unverified)',
+            syncUrl: isCwa ? (cfg.server + '/syncs/progress') : (cfg.server + '/syncs/progress'),
+            authHeader: (isCwa && rawPass) ? ('Basic ' + toBase64(cfg.user + ':' + rawPass)) : (saved.auth_header || ''),
+            key: (!isCwa && rawPass) ? md5(rawPass) : (saved.key || '')
+          };
+        }
+
+        const toSave = {
+          server: cfg.server,
+          sync_url: detected.syncUrl,
+          auth_type: detected.type,
+          auth_header: detected.authHeader,
+          user: cfg.user,
+          key: detected.key,
+          device: cfg.device,
+          device_id: cfg.device_id
+        };
+
+        const deviceDoc = {
+          title: "KOSync Auto-push",
+          description: "Pushes reading progress to a KOSync server on sleep",
+          config: { file: "config.json" },
+          events: {
+            "reader.session": {
+              connect: true,
+              request: {
+                method: "PUT",
+                url: "{cfg.sync_url}",
+                headers: detected.type === 'cwa'
+                  ? {
+                      "Authorization": "{cfg.auth_header}",
+                      "Accept": "application/vnd.koreader.v1+json",
+                      "Content-Type": "application/json"
+                    }
+                  : {
+                      "x-auth-user": "{cfg.user}",
+                      "x-auth-key": "{cfg.key}",
+                      "Accept": "application/vnd.koreader.v1+json",
+                      "Content-Type": "application/json"
+                    },
+                body: "{\"document\":\"{event.document}\",\"progress\":\"crosspoint-autopush\",\"percentage\":{event.end_progress_bp}e-4,\"device\":\"{cfg.device}\",\"device_id\":\"{cfg.device_id}\"}"
+              },
+              toast: "KOSync: progress pushed"
+            }
+          }
+        };
+
+        await api.writeFile(api.dir + '/config.json', toBase64(JSON.stringify(toSave, null, 2)));
+        await api.writeFile(api.dir + '/device.json', toBase64(JSON.stringify(deviceDoc, null, 2)));
+
+        saved = toSave;
         pass.value = '';
         pass.placeholder = '(saved - leave blank to keep)';
-        setStatus('Saved. Restart the reader once after first install so it subscribes to events.', true);
+        setStatus('Saved (' + detected.name + '). Restart the reader once after first install so it subscribes to events.', true);
       } catch (e) {
         setStatus(e.message || String(e), false);
       } finally {
@@ -173,16 +300,16 @@
     };
 
     const intro = el('p', {
-      textContent: 'Pushes your reading position (as a percentage) to a KOSync server when the reader goes to sleep. ' +
+      textContent: 'Pushes your reading position (as a percentage) to a KOSync or Calibre-Web Automated server when the reader goes to sleep. ' +
         'Upload only - pulling progress still uses Sync Progress in the reader menu.'
     });
 
     container.replaceChildren(
       el('h2', { textContent: 'KOSync Auto-push' }),
       intro,
-      field('Server URL', server, 'e.g. https://sync.crosspointreader.com or https://sync.koreader.rocks'),
+      field('Server URL', server, 'e.g. https://sync.crosspointreader.com or http://192.168.1.100:8083'),
       field('Username', user),
-      field('Password', pass, 'Stored only as its MD5 hash, as KOSync expects.'),
+      field('Password', pass, 'Stored securely based on detected server type.'),
       field('Device name', device, 'Shown to other devices as the source of the progress.'),
       el('div', {}, [testBtn, saveBtn]),
       status
